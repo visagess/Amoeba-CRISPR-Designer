@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 import subprocess
 import amoebacrisp as app
-from ssu18s_policy import filter_records
+from ssu18s_policy import filter_records,run_limits
 
 
 def prepare(root,threads=4):
     root=Path(root);out=root/'comparison';work=out/'MAFFT';work.mkdir(exist_ok=True)
-    records=filter_records(json.loads((root/'curated_records.json').read_text()))
+    records=filter_records(json.loads((root/'curated_records.json').read_text()),root)
     fasta=work/'input.fasta';alignment=work/'aligned.fasta';meta=work/'alignment.json'
     app.write_fasta(fasta,((r['id'],r['sequence']) for r in records))
     digest=app.checksum(fasta)
@@ -22,7 +22,8 @@ def prepare(root,threads=4):
     params=['--auto','--adjustdirectionaccurately','--thread',str(threads),app.linux_path(fasta)]
     cmd=app.linux_command(executable,params,config)
     temporary=alignment.with_suffix('.fasta.part')
-    print('MAFFT：800–4000bp核18S序列（含rRNA分子类型记录），多序列比对及方向校正',flush=True)
+    min_bp,max_bp=run_limits(root)
+    print(f'MAFFT：{min_bp}–{max_bp}bp核18S序列（含rRNA分子类型记录），多序列比对及方向校正',flush=True)
     # MAFFT reopens /dev/stderr. Open its descriptors inside WSL so that
     # inherited Windows handles cannot cause /dev/stderr permission errors.
     wrapper="import subprocess,sys; out=open(sys.argv[1],'w'); log=open(sys.argv[2],'w'); subprocess.run(sys.argv[3:],stdout=out,stderr=log,check=True)"

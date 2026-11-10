@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import re
 import amoebacrisp as app
-from ssu18s_policy import filter_records,MIN_18S_BP,MAX_18S_BP,gc_percent
+from ssu18s_policy import filter_records,run_limits,run_settings,gc_percent
 
 GROUPS=('保守序列_有PAM','保守序列_无PAM','特异序列_有PAM','特异序列_无PAM')
 
@@ -184,8 +184,9 @@ def analyze(root,conserved_mismatches=2,target_mismatches=2,background_mismatche
         raise ValueError('目标错配需为0–4，背景排除错配数需小于窗口长度')
     if not isinstance(max_exception_species,int) or max_exception_species<0:raise ValueError('允许不特异物种数需为非负整数')
     root=Path(root);out=root/'comparison';k=window_length
+    min_bp,max_bp=run_limits(root)
     all_records=json.loads((root/'curated_records.json').read_text())
-    length_records=filter_records(all_records)
+    length_records=filter_records(all_records,root)
     if excluded_species:
         raise ValueError('请保留全部背景，并使用每段允许不特异物种数设置例外上限')
     excluded=[]
@@ -194,8 +195,8 @@ def analyze(root,conserved_mismatches=2,target_mismatches=2,background_mismatche
     byid={r['id']:r for r in records}; ref=byid[cohorts['reference']];dna=ref['sequence'];n=len(dna)-k+1
     valid=[r for r in records if re.search('[ACGT]{20}',r['sequence'])]
     priority=set(cohorts['target_priority']) & set(byid)
-    if not priority:raise ValueError('800–4000bp范围内没有优先目标序列')
-    genus=[r for r in valid if r['role'] in ('target_N_gruberi','background_Naegleria_named')]
+    if not priority:raise ValueError('指定长度范围内没有优先目标序列')
+    genus=[r for r in valid if r['role'] in ('target','background_genus')]
     genus_labels={r['organism'] for r in genus}
     # Near-full 18S supplies a common comparison backbone. Short fragments add
     # evidence wherever they cover, but never veto an unrelated missing site.
@@ -205,7 +206,7 @@ def analyze(root,conserved_mismatches=2,target_mismatches=2,background_mismatche
     if not 1<=minimum<=maximum<=len(genus_labels):raise ValueError(f'保守物种覆盖区间需在1–{len(genus_labels)}内')
     background=[r for r in records if r['role'].startswith('background_') and not unresolved_name(r['organism'])]
     background_labels={r['organism'] for r in background}
-    unresolved=[r for r in records if r['role']=='unresolved_Naegleria' or (r['role'].startswith('background_') and unresolved_name(r['organism']))]
+    unresolved=[r for r in records if r['role'].startswith('unresolved_') or (r['role'].startswith('background_') and unresolved_name(r['organism']))]
     known_labels_by_start=[set() for _ in range(n)]
     genus_labels_by_start=[set() for _ in range(n)]
     genus_conflict=[False]*n;target_conflict=[False]*n;target_support=[set() for _ in range(n)]
@@ -219,11 +220,11 @@ def analyze(root,conserved_mismatches=2,target_mismatches=2,background_mismatche
     for r in valid:
         for start,word in contiguous_windows(bases[r['id']],positions[r['id']],k):
             differences=mismatch_count(word,dna[start:start+k])
-            if r['role']=='target_N_gruberi':
+            if r['role']=='target':
                 target_max_mismatches[start]=max(target_max_mismatches[start],differences)
                 if differences>target_mismatches:target_conflict[start]=True
                 if r['id'] in priority and differences<=target_mismatches:target_support[start].add(r['id'])
-            if r['role'] in ('target_N_gruberi','background_Naegleria_named'):
+            if r['role'] in ('target','background_genus'):
                 genus_labels_by_start[start].add(r['organism'])
                 genus_max_mismatches[start]=max(genus_max_mismatches[start],differences)
                 species_mismatches[start][r['organism']]=max(species_mismatches[start].get(r['organism'],0),differences)
@@ -314,18 +315,20 @@ def analyze(root,conserved_mismatches=2,target_mismatches=2,background_mismatche
     for name,items in (rows.items() if write_outputs else []):
         app.write_tsv(out/(name+'.tsv'),items,headers)
         app.write_fasta(out/(name+'.fasta'),((r['id'],r['sequence']) for r in items))
+    request=run_settings(root)
     result={'groups':rows,'counts':{name:len(items) for name,items in rows.items()},'reference':ref['accession'],
+        'background_genera':request.get('background_genera',[]),'database':request.get('database','local_or_legacy'),
         'target':ref['organism'],'window_length':k,'genus_species':sorted(genus_labels),
         'DNA_source_records':sum(r.get('DNA_supported',False) for r in valid),
         'rRNA_or_other_source_records':sum(not r.get('DNA_supported',False) for r in valid),
-        'min_input_bp':MIN_18S_BP,'max_input_bp':MAX_18S_BP,'input_records':len(records),'excluded_by_length':len(all_records)-len(length_records),
+        'min_input_bp':min_bp,'max_input_bp':max_bp,'input_records':len(records),'excluded_by_length':len(all_records)-len(length_records),
         'excluded_species':excluded,'excluded_by_species_records':len(length_records)-len(records),
         'background_species':sorted(background_labels),'valid_DNA_records':sum(r.get('DNA_supported',False) for r in valid),
         'valid_sequence_records':len(valid),'audit':dict(audit),
         'backbone_species':sorted(backbone_labels),'conserved_mismatches':conserved_mismatches,'target_mismatches':target_mismatches,'background_mismatches':background_mismatches,
         'coverage_min':minimum,'coverage_max':maximum,'alignment_method':alignment_method,
         'max_exception_species':max_exception_species,'unresolved_background_labels':sorted({r['organism'] for r in unresolved}),
-        'rules':{'conserved':'Only extracted 18S 800–4000bp inclusive enter comparison. A species counts as conserved when every assessed record at this site is within tolerance to the reference. Conserved species count must fall in the inclusive user interval and include the target. Unassessed species remain missing.',
+        'rules':{'conserved':'Only extracted 18S within the run-specific inclusive bp limits enter comparison. A species counts as conserved when every assessed record at this site is within tolerance to the reference. Conserved species count must fall in the inclusive user interval and include the target. Unassessed species remain missing.',
                  'specific':'Keep all background records. Each named species with any <=radius match on either strand is one per-window exception. Accept up to the configured count and require at least one covered, non-exception species. Unresolved labels are screened separately and marked for review, never counted as named species. Strict zero-exception mode also rejects unresolved hits. Missing homologous sites remain unassessed. No indels modeled.',
                  'pam':'Reference upstream TTTV on either strand; no-PAM means neither strand has TTTV for that 20nt interval. PAM conservation across other species is not required.',
                  'scope':'Downloaded annotated 18S only, not all public species. Exact DNA specificity is not a near-match crRNA safety assessment. CaSilico guide filtering remains separate.'}}

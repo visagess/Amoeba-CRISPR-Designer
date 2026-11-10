@@ -6,7 +6,9 @@ The current primary workflow compares nuclear 18S rDNA. It finds conserved and c
 
 ## 中文快速说明
 
-当前主流程为核18S分析，可在线获取已验证的 N. gruberi 专题数据，也可导入自己的FASTA并选择目标文件。输入长度限定800–4000 bp，使用MAFFT比对，分别输出有PAM和无PAM的保守、特异候选。特异区逐段统计例外物种，默认允许3种，未定种命中另列待核查。CaSilico保留20nt独立设计，EasyDesign对有PAM的21nt候选独立设计和预测，最后导出Excel。
+当前主流程为核18S分析。在线模式可填写任意有效的目标种学名、多个背景属和最短/最长bp，也可导入自己的FASTA并选择目标文件。长度默认800–4000 bp，可自行调整，在线和本地模式均采用相同设置。使用MAFFT比对，分别输出有PAM和无PAM的保守、特异候选。特异区逐段统计例外物种，默认允许3种，未定种命中另列待核查。CaSilico保留20nt独立设计，EasyDesign对有PAM的21nt候选独立设计和预测，最后导出Excel。
+
+在线搜索先通过NCBI Taxonomy核对完整物种/属名称，再分页获取所选属的全部检索结果。目标属自动加入背景和保守比较。NCBI模式按多个18S/SSU别称检索核酸记录，AmoebaDB模式从公开存档的基因组和明确18S GFF3注释提取。bp范围按提取后的连续18S DNA计算，保留内含子，范围外数据不参加后续筛查。数据库没有合格注释时会明确报出数据缺失，不会改用其他数据库。
 
 首次使用请先完成下方依赖安装，将 `config.example.json` 复制为 `config.json` 并填写本机工具路径，再运行 `gui.py` 或 `launch.cmd`。本机配置文件由Git忽略。README下方给出命令行、本地导入格式、筛选规则和结果说明。
 
@@ -14,7 +16,7 @@ The current primary workflow compares nuclear 18S rDNA. It finds conserved and c
 
 ```text
 NCBI nuclear 18S retrieval / local per-species FASTA files
-  → annotation-aware extraction and 800–4000 bp length filter
+  → annotation-aware extraction and user-selected inclusive bp filter
   → MAFFT alignment and physical DNA coordinate projection
   → conserved / specific windows, with / without TTTV PAM
   → CaSilico 20 nt designs and background screening
@@ -22,7 +24,7 @@ NCBI nuclear 18S retrieval / local per-species FASTA files
   → Excel workbook and underlying audit files
 ```
 
-The online 18S preset is currently validated for target **Naegleria gruberi** and background genera **Naegleria + Entamoeba** through NCBI Nucleotide. The local FASTA workflow supports a user-selected target file and background files with confirmed species labels. The GUI also retains genome-region and shared-gene modes. Those modes support NCBI Datasets or the public AmoebaDB archive. BRAKER4 and OrthoFinder belong to the shared-gene mode.
+The online 18S workflow accepts a target species, one or more background genera and inclusive minimum/maximum bp limits. The target genus is always included for within-genus conservation and background screening. NCBI Nucleotide and the public AmoebaDB archive are selectable. Taxonomy metadata is resolved through NCBI Taxonomy for both sources. The local FASTA workflow supports a user-selected target file and background files with confirmed species labels. The GUI also retains genome-region and shared-gene modes. BRAKER4 and OrthoFinder belong to the shared-gene mode.
 
 ## Features
 
@@ -72,15 +74,17 @@ F:\AmoebaCrisp\software\app-env\Scripts\python.exe gui.py
 
 Alternatively, set `AMOEBA_PYTHON` to the environment's Python executable and double-click `launch.cmd`.
 
-For the online pilot, select `18S专题（N. gruberi）` and keep its verified target/background preset. For local data, click **导入FASTA并选目标文件**, select unaligned nucleotide FASTA files, confirm each species label, and select exactly one target file. A file may contain multiple variants of the same species. Confirm that the supplied sequences are nuclear 18S.
+For online retrieval, select `18S在线搜索`, enter the full target species name and comma-separated background genera, choose the database, and set `18S最短长度` / `18S最长长度`. The GUI starts with N. gruberi, Naegleria + Entamoeba and 800–4000 bp as editable defaults. For local data, click **导入FASTA并选目标文件**, select unaligned nucleotide FASTA files, confirm each species label, and select exactly one target file. A file may contain multiple variants of the same species. Confirm that the supplied sequences are nuclear 18S. The same length fields apply to local inputs.
 
 ### Command line
 
 ```powershell
-python ssu18s_run.py --threads 4 --mismatches 2 --background-min-mismatches 2 --max-exception-species 3
+python ssu18s_run.py --target "Naegleria gruberi" --background-genus Naegleria --background-genus Entamoeba --min-bp 800 --max-bp 4000 --threads 4 --mismatches 2 --background-min-mismatches 2 --max-exception-species 3
 ```
 
-Add `--reuse-data` to reuse the curated inputs. Optional `--coverage-min` and `--coverage-max` select the conserved-species interval, including the target species. Leaving both unset requires coverage of the available same-genus species set.
+Repeat `--background-genus` for additional genera. Omitting it searches the target genus. Use `--database amoebadb` to extract explicitly annotated nuclear 18S loci from the public archive. Both modes first extract 18S and then apply the requested bp limits, avoiding source-record length filters that would discard longer genomes containing suitable loci.
+
+Each new task creates an isolated directory under `18S_analysis/runs` and writes its request, canonical taxonomy names, length limits and data provenance. Add `--reuse-data --data F:/path/to/run` to reuse those curated inputs. Changed target, background, database or length settings require a new task so previous filtered inputs cannot silently affect the result. Optional `--coverage-min` and `--coverage-max` select the conserved-species interval, including the target species. Leaving both unset requires coverage of the available same-genus species set.
 
 A local import uses `--local-manifest path/to/inputs.json` with this structure.
 
@@ -108,7 +112,7 @@ Shared-gene mode uses existing annotations when available. For reannotation it c
 
 | Setting | Default |
 |---|---|
-| Extracted nuclear 18S length | 800–4000 bp, inclusive |
+| Extracted nuclear 18S length | 800–4000 bp, inclusive and adjustable, minimum 20 bp |
 | Comparison window | 20 nt |
 | Target / conserved tolerance | At most 2 substitutions |
 | Conserved coverage | All available same-genus species, adjustable |
@@ -125,7 +129,7 @@ Different within-species sequences remain in comparison. Identical sequences wit
 
 ## Outputs
 
-Excel workbooks are written under `F:/AmoebaCrisp/outputs` by default. The six sheets are overview, conserved with PAM, conserved without PAM, specific with PAM, specific without PAM, and EasyDesign 21 nt designs. Empty groups have headers only.
+Excel workbooks are written under `F:/AmoebaCrisp/outputs/<run-name>` by default. Filenames include the target species and bp range. The six sheets are overview, conserved with PAM, conserved without PAM, specific with PAM, specific without PAM, and EasyDesign 21 nt designs. Empty groups have headers only.
 
 Rows include coordinates, strand, GC content, coverage, exception species and matching evidence where applicable. Underlying JSON, TSV, FASTA, alignments, CaSilico results, official EasyDesign design output and model/input checksums remain under the run's `comparison` directory.
 
@@ -135,7 +139,7 @@ EasyDesign scores are official model outputs for the reference target. They are 
 
 Run the automated tests with `python -m unittest discover -s tests -v`. Tests cover extraction, local import, strand handling, continuous-coordinate projection, mismatch screening, per-window exception counting and model-context construction.
 
-The original local deployment was exercised with real N. gruberi inputs, MAFFT, CaSilico and the official EasyDesign Cas12a model. BRAKER4 reannotation and multi-assembly OrthoFinder require additional end-to-end validation. The AmoebaDB option uses a public CyVerse archive whose versions may differ from the current database website. The online 18S preset uses NCBI Nucleotide.
+The original local deployment was exercised with real N. gruberi inputs, MAFFT, CaSilico and the official EasyDesign Cas12a model. The configurable online workflow was additionally exercised end-to-end using **Vahlkampfia avara**, background **Vahlkampfia**, and **500–3500 bp**. NCBI returned 33 source records, with 16 deduplicated sequences passing the length range, and the pipeline completed CaSilico, MAFFT, 17 EasyDesign predictions and Excel export. AmoebaDB GFF3 extraction is covered by local tests, including genomic-intron preservation. A live archive-to-design run remains to be verified. BRAKER4 reannotation and multi-assembly OrthoFinder also require additional end-to-end validation. The public CyVerse archive may differ from the current AmoebaDB website.
 
 The distributable was also tested end-to-end on 486 eligible input sequences. That fresh alignment produced 14 conserved PAM windows, 310 conserved no-PAM windows, 1 conditional specific PAM window, 7 conditional specific no-PAM windows, and 15 EasyDesign designs. Multithreaded MAFFT iterative refinement can vary between fresh runs, changing some conserved windows. Preserve `comparison/MAFFT/aligned.fasta` and its checksum to reproduce a particular result. The earlier cached alignment had 15/308 conserved windows and 16 EasyDesign designs. Both runs retained the same count of 8 conditional specific 20 nt windows.
 

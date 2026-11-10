@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 
 import amoebacrisp as app
-from ssu18s_policy import filter_records,MIN_18S_BP,MAX_18S_BP
+from ssu18s_policy import filter_records,MIN_18S_BP,MAX_18S_BP,length_limits
 
 EUTILS='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
 ALIASES=['18S','18S ribosomal RNA','18S rRNA','18S ribosomal DNA','18S rDNA',
@@ -92,25 +92,34 @@ def source_info(record):
             'mol_type':record.findtext('GBSeq_moltype','')}
 
 
-def classify(organism):
-    name=organism.casefold()
-    if name=='naegleria gruberi' or name.startswith('naegleria gruberi '):return 'target_N_gruberi'
-    if name.startswith('entamoeba '):return 'background_Entamoeba'
-    if name.startswith('naegleria '):
-        if re.match(r'naegleria\s+(?:sp\.?\b|cf\.?\b|aff\.?\b|uncultured\b)',name):
-            return 'unresolved_Naegleria'
-        return 'background_Naegleria_named'
+def classify(organism,target='Naegleria gruberi',background_genera=None):
+    name=' '.join(organism.split()).casefold()
+    target=' '.join(target.split()).casefold()
+    genus=target.split()[0]
+    if name==target or name.startswith(target+' '):return 'target'
+    unresolved=bool(re.search(r'\b(?:sp|cf|aff)\.?\s|\buncultured\b|\bunidentified\b',name+' '))
+    if name.startswith(genus+' '):
+        return 'unresolved_genus' if unresolved else 'background_genus'
+    selected={g.casefold() for g in (background_genera if background_genera is not None else ['Naegleria','Entamoeba'])}
+    if any(name.startswith(g+' ') for g in selected):
+        return 'unresolved_other' if unresolved else 'background_other'
     return 'taxonomy_review'
 
 
-def curate_record(record):
+def curate_record(record,target='Naegleria gruberi',background_genera=None,min_bp=MIN_18S_BP,max_bp=MAX_18S_BP):
     accession=record.findtext('GBSeq_accession-version','')
     title=record.findtext('GBSeq_definition','')
     sequence=record.findtext('GBSeq_sequence','').upper()
     info=source_info(record)
     base={'accession':accession,'title':title,**info,'source_record_length':len(sequence),
-          'role':classify(info['organism'])}
+          'role':classify(info['organism'],target,background_genera)}
+    if base['role']=='taxonomy_review':
+        lineage={part.strip().casefold() for part in record.findtext('GBSeq_taxonomy','').split(';')}
+        selected=background_genera if background_genera is not None else ['Naegleria','Entamoeba']
+        if target.split()[0].casefold() in lineage:base['role']='unresolved_genus'
+        elif any(g.casefold() in lineage for g in selected):base['role']='unresolved_other'
     rejects=[]
+    if base['role']=='taxonomy_review':return [],[{**base,'reason':'outside_selected_taxonomy'}]
     if not sequence:return [],[{**base,'reason':'no_sequence'}]
     if re.search('mitochond|plastid|chloroplast',info['organelle'],re.I) or re.search(r'\bmitochondri(?:al|on)\b',title,re.I):
         return [],[{**base,'reason':'organelle_SSU_not_nuclear_18S'}]
@@ -135,7 +144,7 @@ def curate_record(record):
         partial=('<' in location or '>' in location or 'partial' in q or
                  ('partial' in title.casefold() and len(features)==1 and len(sequence)==len(dna)))
         length=len(dna)
-        tier='eligible_800_4000' if MIN_18S_BP<=length<=MAX_18S_BP else ('below_800_excluded' if length<MIN_18S_BP else 'above_4000_excluded')
+        tier=f'eligible_{min_bp}_{max_bp}' if min_bp<=length<=max_bp else (f'below_{min_bp}_excluded' if length<min_bp else f'above_{max_bp}_excluded')
         row={**base,'id':app.slug(accession)+f'__18S_{number}','product':label,
              'feature_key':feature.findtext('GBFeature_key'),
              'feature_location':location,'record_start_1based':start,'record_end_1based':end,'strand':strand,
@@ -150,20 +159,74 @@ def curate_record(record):
     return rows,rejects
 
 
-def retrieve(root):
+def search_ids(db,term):
+    """Page through all results and reject incomplete/unstable searches."""
+    ids=[];total=None
+    while total is None or len(ids)<total:
+        response=json.loads(app.fetch(EUTILS+'esearch.fcgi?'+urlencode({
+            'db':db,'term':term,'retmode':'json','retstart':len(ids),'retmax':1000})))
+        result=response['esearchresult'];count=int(result['count'])
+        if total is not None and count!=total:
+            raise RuntimeError('检索期间数据库记录数发生变化，请重新运行以获得完整清单')
+        total=count;batch=result.get('idlist',[])
+        if not batch and len(ids)<total:raise RuntimeError('数据库返回不完整，不能静默截断')
+        ids.extend(batch)
+    if len(ids)!=len(set(ids)) or len(ids)!=total:
+        raise RuntimeError('检索记录重复或数量不符，不能继续分析')
+    return ids
+
+
+def resolve_taxon(name,rank):
+    name=' '.join(name.split())
+    if not re.fullmatch(r'[A-Za-z][A-Za-z ._-]*',name):raise ValueError('请填写有效的完整拉丁学名')
+    ids=search_ids('taxonomy',f'"{name}"[All Names]')
+    if len(ids)!=1:raise ValueError(f'无法唯一确定分类名称 {name}，请使用完整学名')
+    xml=ET.fromstring(app.fetch(EUTILS+'efetch.fcgi?'+urlencode({'db':'taxonomy','id':ids[0]})))
+    taxon=xml.find('Taxon')
+    if taxon is None or taxon.findtext('Rank')!=rank:
+        raise ValueError(f'{name}不是有效的{rank}分类名称')
+    return {'name':taxon.findtext('ScientificName'),'taxid':taxon.findtext('TaxId'),'rank':rank}
+
+
+def search_scope(target,background_genera):
+    target_taxon=resolve_taxon(target,'species')
+    genus=target_taxon['name'].split()[0]
+    names=list(dict.fromkeys([genus]+list(background_genera)))
+    genera=[resolve_taxon(name,'genus') for name in names]
+    genera=list({row['taxid']:row for row in genera}.values())
+    return target_taxon,genera
+
+
+def retrieve(root,target='Naegleria gruberi',background_genera=None,min_bp=MIN_18S_BP,max_bp=MAX_18S_BP,database='ncbi'):
+    min_bp,max_bp=length_limits(min_bp,max_bp)
+    root=Path(root)
     root.mkdir(parents=True,exist_ok=True)
+    target_taxon,genera=search_scope(target,background_genera if background_genera is not None else [])
+    target=target_taxon['name'];background_genera=[r['name'] for r in genera]
+    request={'target':target,'target_taxid':target_taxon['taxid'],'background_genera':background_genera,
+             'background_taxa':genera,'database':database,'min_input_bp':min_bp,'max_input_bp':max_bp,
+             'length_basis':'extracted_nuclear_18S_with_genomic_introns','target_genus_included':True}
+    app.write_json(root/'analysis_request.json',request)
+    if database=='amoebadb':
+        from ssu18s_amoebadb import retrieve_features
+        all_rows,rejected,queries,accessions=retrieve_features(root,target_taxon,genera,min_bp,max_bp)
+    elif database=='ncbi':
+        all_rows,rejected,queries,accessions=retrieve_ncbi(root,target,genera,min_bp,max_bp)
+    else:raise ValueError('数据库需为ncbi或amoebadb')
+    return save_curated(root,all_rows,rejected,queries,accessions,request)
+
+
+def retrieve_ncbi(root,target,genera,min_bp,max_bp):
     queries={}
-    for genus in ['Naegleria','Entamoeba']:
+    for taxon in genera:
+        genus=taxon['name']
         # Broad discovery; length is intentionally not part of this query.
         aliases=' OR '.join('"'+alias+'"[All Fields]' for alias in ALIASES)
-        term=f'{genus}[Organism:exp] AND ({aliases})'
-        result=json.loads(app.fetch(EUTILS+'esearch.fcgi?'+urlencode({'db':'nuccore','term':term,'retmode':'json','retmax':10000})))
-        total=int(result['esearchresult']['count'])
-        ids=result['esearchresult']['idlist']
-        if total>len(ids):raise RuntimeError('检索超过当前批量上限，不能静默截断')
-        app.write_json(root/(genus+'_search.json'),{'term':term,'result':result})
+        term=f'txid{taxon["taxid"]}[Organism:exp] AND ({aliases})'
+        ids=search_ids('nuccore',term)
+        app.write_json(root/(app.slug(genus)+'_search.json'),{'term':term,'count':len(ids),'ids':ids})
         queries[genus]=ids
-        app.log(f'{genus}：宽检索 {total} 条记录，待逐条核对 rRNA 注释。')
+        app.log(f'{genus}：宽检索 {len(ids)} 条记录，待逐条核对 rRNA 注释。')
     ids=sorted(set(v for values in queries.values() for v in values),key=int)
     jobs=[]
     raw=root/'raw_genbank';raw.mkdir(exist_ok=True)
@@ -190,8 +253,13 @@ def retrieve(root):
             accession=record.findtext('GBSeq_accession-version','')
             if accession in accessions:continue
             accessions.add(accession)
-            rows,skip=curate_record(record)
+            rows,skip=curate_record(record,target,[t['name'] for t in genera],min_bp,max_bp)
             all_rows.extend(rows);rejected.extend(skip)
+    return all_rows,rejected,queries,accessions
+
+
+def save_curated(root,all_rows,rejected,queries,accessions,request):
+    min_bp,max_bp=request['min_input_bp'],request['max_input_bp']
     # Keep every accession in the manifest. FASTA representatives are deduplicated
     # per organism and DNA sequence, never across named species.
     groups={}
@@ -211,12 +279,12 @@ def retrieve(root):
     app.write_tsv(root/'excluded_or_review.tsv',rejected,
                   ['accession','organism','taxid','title','source_record_length','reason'])
     app.write_fasta(root/'all_curated_18S.fasta',((r['id'],r['sequence']) for r in unique))
-    eligible=filter_records(unique)
+    eligible=filter_records(unique,root)
     panels={
-        'target_priority': [r for r in eligible if r['role']=='target_N_gruberi' and not r['annotated_partial'] and r['ambiguous_bases']==0 and r['DNA_supported']],
-        'target_partial_or_review': [r for r in eligible if r['role']=='target_N_gruberi' and not (not r['annotated_partial'] and r['ambiguous_bases']==0 and r['DNA_supported'])],
+        'target_priority': [r for r in eligible if r['role']=='target' and r['ambiguous_bases']==0 and r['DNA_supported']],
+        'target_partial_or_review': [r for r in eligible if r['role']=='target' and not (r['ambiguous_bases']==0 and r['DNA_supported'])],
         'known_background': [r for r in eligible if r['role'].startswith('background_')],
-        'unresolved_Naegleria': [r for r in eligible if r['role']=='unresolved_Naegleria'],
+        'unresolved_background': [r for r in eligible if r['role'].startswith('unresolved_')],
     }
     for name,rows in panels.items():
         app.write_fasta(root/(name+'.fasta'),((r['id'],r['sequence']) for r in rows))
@@ -225,14 +293,14 @@ def retrieve(root):
         stats=species.setdefault(row['organism'],{'organism':row['organism'],'role':row['role'],'unique_18S_sequences':0,
                                                  'priority_length':0,'short_fragments':0,'long_annotated':0,'partial_annotation':0})
         stats['unique_18S_sequences']+=1
-        stats['priority_length']+=MIN_18S_BP<=row['length']<=MAX_18S_BP
-        stats['short_fragments']+=row['length']<MIN_18S_BP
-        stats['long_annotated']+=row['length']>MAX_18S_BP
+        stats['priority_length']+=min_bp<=row['length']<=max_bp
+        stats['short_fragments']+=row['length']<min_bp
+        stats['long_annotated']+=row['length']>max_bp
         stats['partial_annotation']+=row['annotated_partial']
     app.write_tsv(root/'species_coverage.tsv',list(species.values()),
                   ['organism','role','unique_18S_sequences','priority_length','short_fragments','long_annotated','partial_annotation'])
-    summary={'retrieved_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'aliases':ALIASES,
-             'min_input_bp':MIN_18S_BP,'max_input_bp':MAX_18S_BP,'eligible_by_length':len(eligible),'excluded_by_length':len(unique)-len(eligible),
+    summary={**request,'retrieved_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'aliases':ALIASES,
+             'eligible_by_length':len(eligible),'excluded_by_length':len(unique)-len(eligible),
              'raw_search_counts':{k:len(v) for k,v in queries.items()},'downloaded_accessions':len(accessions),
              'annotated_18S_features':len(all_rows),'unique_sequences_within_organism':len(unique),
              'organism_labels':len(species),'panel_counts':{k:len(v) for k,v in panels.items()},
@@ -245,27 +313,34 @@ def retrieve(root):
 
 
 def write_report(root,summary,species):
+    minimum,maximum=summary['min_input_bp'],summary['max_input_bp']
     rows=''.join('<tr>'+''.join('<td>'+html.escape(str(value))+'</td>' for value in
                  [r['organism'],r['role'],r['unique_18S_sequences'],r['priority_length'],r['short_fragments'],r['long_annotated']])+'</tr>'
                  for r in sorted(species.values(),key=lambda r:r['organism']))
     page=f'''<!doctype html><meta charset="utf-8"><title>18S rDNA 数据核对</title>
     <style>body{{font:16px system-ui;margin:36px;line-height:1.7}}td,th{{border:1px solid #ccc;padding:6px}}table{{border-collapse:collapse}}</style>
-    <h1>奈格里属与内阿米巴属：18S rDNA 数据核对</h1>
+    <h1>{html.escape(summary['target'])}：18S rDNA 数据核对</h1>
+    <p>背景属：{html.escape(', '.join(summary['background_genera']))}；数据库：{html.escape(summary['database'])}。</p>
     <p>按 18S/SSU 多别称检索，再按明确的 rRNA 或单一SSU产品的 misc_RNA feature 提取；剔除线粒体/质体 SSU。无法明确定位18S、或仅注释整段混合rDNA单元的记录放入待复核表。</p>
-    <p>800–4000 bp（含边界）是比较、脱靶和设计输入的硬范围。范围外记录仅在原始数据中留档，不进入任何筛选。DNA内含子保留后计算长度；不构造剪接靶点。</p>
-    <p>去重后明确注释序列：{summary['unique_sequences_within_organism']}；目标优先序列：{summary['panel_counts']['target_priority']}；已知背景：{summary['panel_counts']['known_background']}；未定种奈格里序列：{summary['panel_counts']['unresolved_Naegleria']}。</p>
+    <p>{minimum}–{maximum} bp（含边界）是比较、脱靶和设计输入的硬范围。范围外记录仅在原始数据中留档，不进入任何筛选。DNA内含子保留后计算长度；不构造剪接靶点。</p>
+    <p>去重后明确注释序列：{summary['unique_sequences_within_organism']}；目标优先序列：{summary['panel_counts']['target_priority']}；已知背景：{summary['panel_counts']['known_background']}；未定种背景序列：{summary['panel_counts']['unresolved_background']}。</p>
     <p>同一物种的相同序列合并为一个代表，原 accession 保留在清单。不同物种即使序列相同也不合并。记录数不等于独立株系数。</p>
-    <p>局部背景在某位置没有序列覆盖时，不能当作该位置阴性。未定种奈格里序列可能含目标种，单独保留。</p>
+    <p>局部背景在某位置没有序列覆盖时，不能当作该位置阴性。未定种背景序列可能含目标种，单独保留。</p>
     <p><a href="curated_18S_manifest.tsv">序列清单</a> · <a href="species_coverage.tsv">物种数据覆盖</a> · <a href="all_curated_18S.fasta">18S FASTA</a> · <a href="excluded_or_review.tsv">排除与待复核</a></p>
-    <table><tr><th>物种标签</th><th>分组</th><th>原始不同序列</th><th>800–4000 bp</th><th>低于800，排除</th><th>高于4000，排除</th></tr>{rows}</table>'''
+    <table><tr><th>物种标签</th><th>分组</th><th>原始不同序列</th><th>{minimum}–{maximum} bp</th><th>低于{minimum}，排除</th><th>高于{maximum}，排除</th></tr>{rows}</table>'''
     (root/'18S数据报告.html').write_text(page,encoding='utf-8')
 
 
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--output',default=str(storage_path('18S_analysis')))
+    parser.add_argument('--target',default='Naegleria gruberi')
+    parser.add_argument('--background-genus',action='append')
+    parser.add_argument('--min-bp',type=int,default=800)
+    parser.add_argument('--max-bp',type=int,default=4000)
+    parser.add_argument('--database',choices=['ncbi','amoebadb'],default='ncbi')
     args=parser.parse_args()
-    retrieve(Path(args.output))
+    retrieve(Path(args.output),args.target,args.background_genus,args.min_bp,args.max_bp,args.database)
 
 
 if __name__=='__main__':main()

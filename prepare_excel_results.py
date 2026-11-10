@@ -28,7 +28,7 @@ activity=json.loads((out/'easydesign_results.json').read_text(encoding='utf-8'))
 if activity['input_records']!=result['input_records']:raise ValueError('EasyDesign与比较分析输入记录不一致')
 if activity.get('excluded_species',[])!=result.get('excluded_species',[]):raise ValueError('例外物种已变化，请重新运行预测')
 if activity.get('max_exception_species',0)!=result.get('max_exception_species',0):raise ValueError('逐段例外物种上限已变化，请重新预测')
-for key in ('coverage_min','coverage_max','alignment_method'):
+for key in ('coverage_min','coverage_max','alignment_method','min_input_bp','max_input_bp'):
     if activity.get(key)!=result.get(key):raise ValueError('EasyDesign筛选设置已变化，请重新运行预测')
 if activity.get('background_min_mismatches')!=result['background_mismatches']+1:raise ValueError('背景错配阈值已变化，请重新预测')
 if activity['input_fasta_sha256']!=hashlib.sha256((out/'analysis_input_18S.fasta').read_bytes()).hexdigest():

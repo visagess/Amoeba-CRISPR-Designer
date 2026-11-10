@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import amoebacrisp as app
-from ssu18s_policy import in_length_range
+from ssu18s_policy import in_length_range,length_limits,MIN_18S_BP,MAX_18S_BP
 
 
 def infer_species(text):
@@ -15,7 +15,9 @@ def infer_species(text):
     if match and match[2].lower() not in ('sp','cf','aff'):
         return match[1].capitalize()+' '+match[2].lower()
     match=re.search(r'\bN[. ]+([a-z][a-z-]+)\b',text)
-    return 'Naegleria '+match[1].lower() if match else ''
+    if match:return 'Naegleria '+match[1].lower()
+    match=re.search(r'\b([A-Z][a-z]+)\s+([a-z][a-z-]+)\b',text)
+    return match[1]+' '+match[2] if match and match[2] not in ('sp','cf','aff') else ''
 
 
 def read_records(path):
@@ -35,7 +37,9 @@ def read_records(path):
     if header is not None:yield header,''.join(parts).upper()
 
 
-def import_inputs(manifest,root):
+def import_inputs(manifest,root,min_bp=MIN_18S_BP,max_bp=MAX_18S_BP):
+    from ssu18s import classify
+    min_bp,max_bp=length_limits(min_bp,max_bp)
     manifest=Path(manifest);root=Path(root)
     config=json.loads(manifest.read_text(encoding='utf-8'))
     files=config['files'];targets=[f for f in files if f.get('target')]
@@ -62,7 +66,7 @@ def import_inputs(manifest,root):
             key=(species,sequence)
             if key in seen:continue
             seen.add(key)
-            role='target_N_gruberi' if item.get('target') else ('background_Naegleria_named' if species.split()[0].casefold()==target_genus else 'background_Entamoeba')
+            role=classify(species,target_name,[item['species'].split()[0] for item in files])
             digest=hashlib.sha256((str(path)+'\0'+header+'\0'+sequence).encode()).hexdigest()[:16]
             row={'id':'local_'+digest,'accession':'local_'+digest,'organism':species,'role':role,'sequence':sequence,'length':len(sequence),
                  'title':header,'strain':'','isolate':'','taxid':'','source_file':str(path),'source_record_id':source_id,
@@ -71,15 +75,17 @@ def import_inputs(manifest,root):
                  'ambiguous_bases':sum(b not in 'ACGT' for b in sequence),'sha256':hashlib.sha256(sequence.encode()).hexdigest(),
                  'annotation_method':'user_declared_18S_input','genomic_introns_preserved':True,
                  'record_start_1based':1,'record_end_1based':len(sequence),'strand':'+','circular_origin_wrap':False,'annotation_intervals':1}
-            if in_length_range(row):rows.append(row)
-            else:rejected.append({'file':str(path),'record':source_id,'length':len(sequence),'reason':'outside_800_4000'})
+            if in_length_range(row,min_bp,max_bp):rows.append(row)
+            else:rejected.append({'file':str(path),'record':source_id,'length':len(sequence),'reason':f'outside_{min_bp}_{max_bp}'})
         if count==0:raise ValueError('FASTA为空：'+str(path))
-    if not any(r['role']=='target_N_gruberi' and not r['ambiguous_bases'] for r in rows):
-        raise ValueError('目标文件没有800–4000bp且无模糊碱基的18S序列')
-    if not any(r['role'].startswith('background_') for r in rows):raise ValueError('背景文件没有800–4000bp的有效18S序列')
+    if not any(r['role']=='target' and not r['ambiguous_bases'] for r in rows):
+        raise ValueError(f'目标文件没有{min_bp}–{max_bp}bp且无模糊碱基的18S序列')
+    if not any(r['role'].startswith(('background_','unresolved_')) for r in rows):raise ValueError(f'背景文件没有{min_bp}–{max_bp}bp的有效18S序列')
     root.mkdir(parents=True,exist_ok=True)
     app.write_json(root/'curated_records.json',rows)
     app.write_json(root/'local_import.json',{'target':target_name,'files':files,'excluded_by_length':rejected,
+                   'min_input_bp':min_bp,'max_input_bp':max_bp,
+                   'database':'local','background_genera':sorted({item['species'].split()[0] for item in files}),
                    'input_assumption':'User-supplied sequences are nuclear 18S nucleotide sequences, one species per file. No GenBank feature annotation is inferred.'})
     app.write_fasta(root/'all_curated_18S.fasta',((r['id'],r['sequence']) for r in rows))
     inputs=root/'imported_files';inputs.mkdir(exist_ok=True)

@@ -1,4 +1,4 @@
-"""18S-only comparative profiles and actual CaSilico designs for benign N. gruberi."""
+"""18S-only comparative profiles and actual CaSilico designs for benign {html.escape(reference['organism'])}."""
 from __future__ import annotations
 
 from runtime import storage_path, settings
@@ -14,7 +14,7 @@ import subprocess
 
 import amoebacrisp as app
 import region_pipeline as regions
-from ssu18s_policy import filter_records,MIN_18S_BP,MAX_18S_BP
+from ssu18s_policy import filter_records,run_limits
 
 BASE_BITS={'A':1,'C':2,'G':4,'T':8,'-':32}
 
@@ -72,16 +72,19 @@ def main():
     temporary=Path(str(storage_path('temp')));temporary.mkdir(parents=True,exist_ok=True)
     os.environ.update(TEMP=str(temporary),TMP=str(temporary))
     config=app.default_config()
+    min_bp,max_bp=run_limits(root)
     all_records=json.loads((root/'curated_records.json').read_text())
-    records=filter_records(all_records)
+    records=filter_records(all_records,root)
     app.write_json(out/'analysis_input_records.json',records)
     analysis_fasta=out/'analysis_input_18S.fasta'
     app.write_fasta(analysis_fasta,((r['id'],r['sequence']) for r in records))
     by_id={r['id']:r for r in records}
-    targets=[r for r in records if r['role']=='target_N_gruberi' and
-             not r['annotated_partial'] and r['ambiguous_bases']==0 and r.get('DNA_supported',False)]
-    if not targets:raise RuntimeError('没有适合DNA设计的目标近全长记录')
-    reference=next((r for r in targets if r['accession']=='AB298288.1'),targets[0])
+    targets=[r for r in records if r['role']=='target' and
+             r['ambiguous_bases']==0 and r.get('DNA_supported',False)]
+    if not targets:raise RuntimeError('没有适合DNA设计的目标序列记录')
+    complete=[r for r in targets if not r['annotated_partial']]
+    targets=complete or [min(targets,key=lambda r:(-len(r['sequence']),r['accession'],r['id']))]
+    reference=min(targets,key=lambda r:(r['annotated_partial'],-len(r['sequence']),r['accession'],r['id']))
     refdna=reference['sequence']
     app.write_fasta(out/'reference_18S.fasta',[(reference['id'],refdna)])
     app.log(f"参考18S：{reference['accession']}，{len(refdna)} bp；不同优先目标序列 {len(targets)} 条。")
@@ -129,23 +132,23 @@ def main():
                 if sbase!='-':subject_position+=subject_step
                 position+=1
             if position!=end:raise ValueError('比对序列与参考坐标长度不一致')
-    full_genus=[r for r in records if r['role'] in ['target_N_gruberi','background_Naegleria_named']
+    full_genus=[r for r in records if r['role'] in ['target','background_genus']
                 and r['ambiguous_bases']==0 and r.get('DNA_supported',False)]
-    genus_regions=conserved_profile(refdna,full_genus,observations,aligned_positions,aligned_steps,out,'Naegleria_observed_conserved_18S')
-    target_regions=conserved_profile(refdna,targets,observations,aligned_positions,aligned_steps,out,'Ngruberi_observed_conserved_18S')
+    genus_regions=conserved_profile(refdna,full_genus,observations,aligned_positions,aligned_steps,out,'genus_observed_conserved_18S')
+    target_regions=conserved_profile(refdna,targets,observations,aligned_positions,aligned_steps,out,'target_observed_conserved_18S')
     app.write_json(out/'comparison_cohorts.json',{'reference':reference['id'],'target_priority':[r['id'] for r in targets],
                    'genus_priority':[r['id'] for r in full_genus],
                    'genus_organism_labels':sorted({r['organism'] for r in full_genus}),
                    'conservation_rule':'Identical unambiguous aligned bases AND consecutive physical DNA positions in every cohort sequence; no intron/junction bridging; missing/unaligned bases fail.',
                    'scope':'observed_sequences_not_all_described_species_or_all_strains',
-                   'min_input_bp':MIN_18S_BP,'max_input_bp':MAX_18S_BP})
+                   'min_input_bp':min_bp,'max_input_bp':max_bp})
     design=out/'CaSilico';design.mkdir(exist_ok=True)
     target_samples=[]
     for r in targets:
         path=out/'target_records'/(r['id']+'.fasta')
         app.write_fasta(path,[(r['id'],r['sequence'])])
         target_samples.append({'id':r['id'],'name':r['organism']+' '+r['accession'],'genome':str(path)})
-    group='Ngruberi_18S' if reference['organism']=='Naegleria gruberi' else app.slug(reference['organism'])+'_18S'
+    group=app.slug(reference['organism'])+'_18S'
     group_dir=design/'casilico'/group
     previous=group_dir/'targets.fasta'
     tables=list(group_dir.rglob('Spacers_Information.Html')) if group_dir.exists() else []
@@ -153,7 +156,7 @@ def main():
     if (group_dir/'completed.txt').exists() and previous.exists() and list(app.read_fasta(previous))==expected and len(tables)==1:
         raw=app.parse_casilico(tables[0])
     else:
-        app.log('最终设计工具：CaSilico casV_A；输入为 N. gruberi 优先近全长18S DNA序列。')
+        app.log('最终设计工具：CaSilico casV_A；输入为目标种18S DNA序列。')
         raw=app.design(group,[r['id'] for r in targets],{r['id']:{'dna':r['sequence']} for r in targets},design,config,args.threads)
     candidates=[{**r,'group':group} for r in raw]
     app.write_json(design/'casilico_candidates.json',candidates)
@@ -162,9 +165,9 @@ def main():
     query=out/'guide_queries.fasta'
     app.write_fasta(query,((r['id'],r['spacer_dna_5to3']) for r in guide_rows))
     known=[r for r in records if r['role'].startswith('background_')]
-    unresolved=[r for r in records if r['role']=='unresolved_Naegleria']
+    unresolved=[r for r in records if r['role'].startswith('unresolved_')]
     counters={}
-    for name,cohort in [('known_background',known),('unresolved_Naegleria',unresolved)]:
+    for name,cohort in [('known_background',known),('unresolved_genus',unresolved)]:
         work=out/name;work.mkdir(exist_ok=True)
         fasta=work/'18S.fasta'
         app.write_fasta(fasta,((r['id'],r['sequence']) for r in cohort))
@@ -175,8 +178,8 @@ def main():
             app.external(cmd,work/'screen.log')
             counters[name]=json.loads((work/'summary.json').read_text())['queries']
         else:counters[name]={}
-    named_naegleria=sorted({r['organism'] for r in known if r['role']=='background_Naegleria_named'})
-    partial_targets=[r for r in records if r['role']=='target_N_gruberi' and r['id'] not in {v['id'] for v in targets}]
+    named_genus=sorted({r['organism'] for r in known if r['role']=='background_genus'})
+    partial_targets=[r for r in records if r['role']=='target' and r['id'] not in {v['id'] for v in targets}]
     final=[]
     coverage_rows=[]
     for row in guide_rows:
@@ -190,32 +193,32 @@ def main():
             if sequence_covered(partial,span,hsp_intervals):
                 if app.exact_sites(partial['sequence'],guide):supported+=1
                 else:discordant+=1
-        covered_species={r['organism'] for r in known if r['role']=='background_Naegleria_named' and sequence_covered(r,span,hsp_intervals)}
+        covered_species={r['organism'] for r in known if r['role']=='background_genus' and sequence_covered(r,span,hsp_intervals)}
         known_hits=counters['known_background'].get(row['id'],{}).get('near_hits',0)
-        unknown_hits=counters['unresolved_Naegleria'].get(row['id'],{}).get('near_hits',0)
+        unknown_hits=counters['unresolved_genus'].get(row['id'],{}).get('near_hits',0)
         row.update({'reference_accession':reference['accession'],'reference_start_1based':site['start'],
                     'reference_end_1based_inclusive':site['end'],'reference_strand':site['strand'],
-                    'reference_PAM':site['pam'],'known_background_hits_le3':known_hits,'unresolved_Naegleria_hits_le3':unknown_hits,
+                    'reference_PAM':site['pam'],'known_background_hits_le3':known_hits,'unresolved_genus_hits_le3':unknown_hits,
                     'target_partial_support':supported,'target_partial_discordance':discordant,
-                    'named_Naegleria_labels_with_site_coverage':len(covered_species),
-                    'named_Naegleria_background_labels':len(named_naegleria),
-                    'named_labels_missing_site_coverage':';'.join(s for s in named_naegleria if s not in covered_species),
+                    'named_genus_labels_with_site_coverage':len(covered_species),
+                    'named_genus_background_labels':len(named_genus),
+                    'named_labels_missing_site_coverage':';'.join(s for s in named_genus if s not in covered_species),
                     'passes_observed_data':row['passes_target_filters']=='True' and known_hits==0 and discordant==0,
                     'whole_genus_specificity_established':False})
         final.append(row)
-        for species in named_naegleria:
+        for species in named_genus:
             coverage_rows.append({'guide':row['id'],'organism_label':species,'has_aligned_DNA_site_coverage':species in covered_species})
     app.write_tsv(out/'18S_crRNA_results.tsv',final,list(final[0]) if final else ['id'])
     app.write_tsv(out/'per_guide_species_coverage.tsv',coverage_rows,['guide','organism_label','has_aligned_DNA_site_coverage'])
     selected=[r for r in final if r['passes_observed_data']]
-    strict=[r for r in selected if r['unresolved_Naegleria_hits_le3']==0]
-    app.write_fasta(out/'Ngruberi_18S_spacers_candidates.fasta',((r['id'],r['spacer_rna_5to3']) for r in selected))
-    app.write_fasta(out/'Ngruberi_18S_full_RNA_CaSilico_default.fasta',((r['id'],r['full_crrna_rna_5to3']) for r in selected))
-    app.write_fasta(out/'Ngruberi_18S_spacers_no_unresolved_hits.fasta',((r['id'],r['spacer_rna_5to3']) for r in strict))
+    strict=[r for r in selected if r['unresolved_genus_hits_le3']==0]
+    app.write_fasta(out/'target_18S_spacers_candidates.fasta',((r['id'],r['spacer_rna_5to3']) for r in selected))
+    app.write_fasta(out/'target_18S_full_RNA_CaSilico_default.fasta',((r['id'],r['full_crrna_rna_5to3']) for r in selected))
+    app.write_fasta(out/'target_18S_spacers_no_unresolved_hits.fasta',((r['id'],r['spacer_rna_5to3']) for r in strict))
     summary={'target':reference['organism'],'reference':reference['accession'],'reference_18S_length':len(refdna),'target_priority_sequences':len(targets),
-             'min_input_bp':MIN_18S_BP,'max_input_bp':MAX_18S_BP,'input_records':len(records),'excluded_by_length':len(all_records)-len(records),
+             'min_input_bp':min_bp,'max_input_bp':max_bp,'input_records':len(records),'excluded_by_length':len(all_records)-len(records),
              'other_target_sequences':len(partial_targets),'known_background_sequences':len(known),
-             'unresolved_Naegleria_sequences':len(unresolved),'genus_conservation_cohort_sequences':len(full_genus),
+             'unresolved_genus_sequences':len(unresolved),'genus_conservation_cohort_sequences':len(full_genus),
              'genus_conservation_cohort_labels':len({r['organism'] for r in full_genus}),
              'genus_conserved_runs_ge20':len(genus_regions),'target_conserved_runs_ge20':len(target_regions),
              'CaSilico_candidates':target_stats['candidates'],'observed_data_RNA_candidates':len(selected),
@@ -224,18 +227,18 @@ def main():
     app.write_json(out/'status.json',{'status':'completed',**summary})
     body=''.join('<tr>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in
                  [r['id'],r['spacer_rna_5to3'],r['reference_start_1based'],r['reference_end_1based_inclusive'],
-                  r['reference_strand'],r['known_background_hits_le3'],r['unresolved_Naegleria_hits_le3'],
-                  f"{r['named_Naegleria_labels_with_site_coverage']}/{r['named_Naegleria_background_labels']}"])+'</tr>' for r in selected)
-    page=f'''<!doctype html><meta charset="utf-8"><title>N. gruberi 18S 比较</title>
+                  r['reference_strand'],r['known_background_hits_le3'],r['unresolved_genus_hits_le3'],
+                  f"{r['named_genus_labels_with_site_coverage']}/{r['named_genus_background_labels']}"])+'</tr>' for r in selected)
+    page=f'''<!doctype html><meta charset="utf-8"><title>{html.escape(reference['organism'])} 18S 比较</title>
     <style>body{{font:16px system-ui;margin:36px;line-height:1.7}}table{{border-collapse:collapse}}td,th{{border:1px solid #ccc;padding:7px}}.note{{background:#fff2cf;padding:14px}}</style>
-    <h1>仅限18S rDNA：全属比较，落脚 N. gruberi</h1>
-    <p>参考 {reference['accession']}，提取18S DNA {len(refdna)} bp。优先目标不同序列 {len(targets)} 条，其他目标片段 {len(partial_targets)} 条；已知背景序列 {len(known)} 条，未定种奈格里序列 {len(unresolved)} 条。</p>
-    <p>800–4000 bp（含边界）、明确DNA且无模糊碱基的奈格里比较集：{len(full_genus)} 条序列、{len({r['organism'] for r in full_genus})} 个物种标签。该比较集包含范围内partial记录，仅在每条序列均有比对支撑的位置评价严格保守。严格相同的 ≥20 bp 连续区：全比较集 {len(genus_regions)} 段，目标优先序列 {len(target_regions)} 段。范围外记录不参与比较、脱靶或设计。</p>
-    <p>CaSilico 生成 {target_stats['candidates']} 条不同候选；通过当前已观察目标变异和已知背景筛查：{len(selected)} 条；其中未定种奈格里也无阈值内匹配：{len(strict)} 条。</p>
-    <p class="note">这是当前公开序列范围内的计算结果，不代表覆盖所有已认可种或全部 N. gruberi 株系。片段没有覆盖位点时记为未评估，绝不当阴性。未定种奈格里可能包含目标种，匹配结果单列。每条候选均给出同源位点实际覆盖的背景物种标签数。</p>
+    <h1>仅限18S rDNA：全属比较，落脚 {html.escape(reference['organism'])}</h1>
+    <p>参考 {reference['accession']}，提取18S DNA {len(refdna)} bp。优先目标不同序列 {len(targets)} 条，其他目标片段 {len(partial_targets)} 条；已知背景序列 {len(known)} 条，未定种背景序列 {len(unresolved)} 条。</p>
+    <p>{min_bp}–{max_bp} bp（含边界）、明确DNA且无模糊碱基的目标属比较集：{len(full_genus)} 条序列、{len({r['organism'] for r in full_genus})} 个物种标签。该比较集包含范围内partial记录，仅在每条序列均有比对支撑的位置评价严格保守。严格相同的 ≥20 bp 连续区：全比较集 {len(genus_regions)} 段，目标优先序列 {len(target_regions)} 段。范围外记录不参与比较、脱靶或设计。</p>
+    <p>CaSilico 生成 {target_stats['candidates']} 条不同候选；通过当前已观察目标变异和已知背景筛查：{len(selected)} 条；其中未定种背景也无阈值内匹配：{len(strict)} 条。</p>
+    <p class="note">这是当前公开序列范围内的计算结果，不代表覆盖所有已认可种或全部 {html.escape(reference['organism'])} 株系。片段没有覆盖位点时记为未评估，绝不当阴性。未定种背景可能包含目标种，匹配结果单列。每条候选均给出同源位点实际覆盖的背景物种标签数。</p>
     <p>背景筛查条件：明确碱基、两链、TTTV+20 nt、至多3个替换；不包含插入缺失或非典型PAM。序列比对仅用于位置覆盖与保守性描述，不替代实际DNA匹配检查。DNA内含子保留；完整RNA使用CaSilico默认DR，须核对所用Cas12a兼容性。</p>
-    <p><a href="18S_crRNA_results.tsv">全部RNA与位点覆盖</a> · <a href="Ngruberi_18S_full_RNA_CaSilico_default.fasta">完整候选RNA</a> · <a href="Ngruberi_observed_conserved_18S.tsv">目标观察到的保守区</a> · <a href="Naegleria_observed_conserved_18S.tsv">奈格里比较集保守区</a> · <a href="../18S数据报告.html">18S数据核对</a></p>
-    <table><tr><th>编号</th><th>spacer RNA</th><th>参考起点</th><th>终点</th><th>链</th><th>已知背景匹配</th><th>未定种匹配</th><th>具位点覆盖的奈格里标签数</th></tr>{body}</table>'''
+    <p><a href="18S_crRNA_results.tsv">全部RNA与位点覆盖</a> · <a href="target_18S_full_RNA_CaSilico_default.fasta">完整候选RNA</a> · <a href="target_observed_conserved_18S.tsv">目标观察到的保守区</a> · <a href="genus_observed_conserved_18S.tsv">目标属比较集保守区</a> · <a href="../18S数据报告.html">18S数据核对</a></p>
+    <table><tr><th>编号</th><th>spacer RNA</th><th>参考起点</th><th>终点</th><th>链</th><th>已知背景匹配</th><th>未定种匹配</th><th>具位点覆盖的目标属标签数</th></tr>{body}</table>'''
     (out/'18S结果.html').write_text(page,encoding='utf-8')
     app.log(json.dumps(summary,ensure_ascii=False,indent=2))
 

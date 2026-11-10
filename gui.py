@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent
 def main():
     window = tk.Tk()
     window.title("Amoeba CRISPR Designer · Cas12a RNA 设计")
-    window.geometry("1000x900")
+    window.geometry("1000x980")
     frame = ttk.Frame(window, padding=24)
     frame.pack(fill="both", expand=True)
     ttk.Label(frame, text="输入名称，使用 CaSilico 和 EasyDesign 设计 Cas12a crRNA", font=("Microsoft YaHei UI", 16)).pack(anchor="w")
@@ -26,7 +26,7 @@ def main():
     form = ttk.Frame(frame)
     form.pack(fill="x")
     name, database, groups, threads = tk.StringVar(value="Naegleria gruberi"), tk.StringVar(value="NCBI"), tk.StringVar(value="10"), tk.StringVar(value="8")
-    mode=tk.StringVar(value="18S专题（N. gruberi）")
+    mode=tk.StringVar(value="18S在线搜索")
     genera=tk.StringVar(value="Entamoeba, Naegleria")
     background = tk.StringVar()
     mismatches=tk.StringVar(value="2")
@@ -35,7 +35,10 @@ def main():
     local_inputs=[]
     background_min=tk.StringVar(value='2')
     max_exceptions=tk.StringVar(value='3')
+    min_bp=tk.StringVar(value='800')
+    max_bp=tk.StringVar(value='4000')
     fields=[("分析方式",mode),("目标种拉丁学名",name),("数据库",database),("背景属（英文逗号分隔）",genera),
+            ("18S最短长度（bp，含边界）",min_bp),("18S最长长度（bp，含边界）",max_bp),
             ("18S窗口允许错配数（0–4）",mismatches),("保守覆盖物种下限（空=全部）",coverage_min),("保守覆盖物种上限（空=全部）",coverage_max),
             ("特异区与背景最少错配数（含边界）",background_min),("每段允许不特异的背景物种数",max_exceptions),
             ("CaSilico 设计区域数",groups),("线程数",threads),("额外背景 FASTA（可选）",background)]
@@ -44,13 +47,13 @@ def main():
         if variable is database:
             entry=ttk.Combobox(form,textvariable=variable,state="readonly",values=["NCBI","AmoebaDB（公共存档）"])
         elif variable is mode:
-            entry=ttk.Combobox(form,textvariable=variable,state="readonly",values=["18S专题（N. gruberi）","18S本地FASTA","特异区域 + CaSilico","共有基因 + CaSilico"])
+            entry=ttk.Combobox(form,textvariable=variable,state="readonly",values=["18S在线搜索","18S本地FASTA","特异区域 + CaSilico","共有基因 + CaSilico"])
         else:
             entry=ttk.Entry(form,textvariable=variable)
         entry.grid(row=row, column=1, sticky="ew", pady=5)
     form.columnconfigure(1, weight=1)
     ttk.Button(form, text="选择", command=lambda: background.set(filedialog.askopenfilename(filetypes=[("FASTA", "*.fa *.fasta *.fna *.gz"), ("全部", "*")]))).grid(row=len(fields)-1, column=2, padx=(8, 0))
-    ttk.Label(frame,text="18S输入800–4000bp，MAFFT多序列比对，含明确核18S的rRNA来源记录。覆盖上下限留空时按本轮全部物种计算。\n本地输入请选择未比对的核18S FASTA，每个文件一个物种，随后确认物种名称并指定目标文件。\n背景最少错配默认2，四组结果含GC及物种名单，EasyDesign单列21nt活性预测。",wraplength=880).pack(anchor="w",pady=(12,10))
+    ttk.Label(frame,text="在线模式可自定目标种、背景属和18S长度。目标属自动纳入，用于属内保守比较及背景筛查。\n长度范围按提取后的核18S计算，适用于全部目标、背景及后续设计。本地输入每个文件一个物种。\n覆盖上下限留空=本轮目标属全部已定种；四组结果含GC及物种名单，EasyDesign独立预测21nt候选。",wraplength=880).pack(anchor="w",pady=(12,10))
     buttons = ttk.Frame(frame)
     buttons.pack(fill="x", pady=8)
     text = tk.Text(frame, wrap="word", state="disabled", font=("Consolas", 10))
@@ -74,12 +77,14 @@ def main():
             return
         command=[sys.executable.replace("pythonw.exe","python.exe"),"-u"]
         db="ncbi" if database.get()=="NCBI" else "amoebadb"
-        if mode.get() in ("18S专题（N. gruberi）","18S本地FASTA"):
-            supplied={s.strip().casefold() for s in genera.get().replace('，',',').split(',') if s.strip()}
-            if mode.get()=="18S专题（N. gruberi）" and (name.get().strip().casefold()!='naegleria gruberi' or supplied!={'naegleria','entamoeba'} or db!='ncbi' or background.get()):
-                messagebox.showerror("18S专题范围","当前18S专题验证范围为 N. gruberi、NCBI核酸库、Naegleria与Entamoeba两个背景属。请使用默认范围；其他分析方式仍可在下拉框选择。")
+        if mode.get() in ("18S在线搜索","18S本地FASTA"):
+            supplied=[s.strip() for s in genera.get().replace('，',',').split(',') if s.strip()]
+            if background.get():
+                messagebox.showerror("18S本地输入","18S文件请通过“导入FASTA并选目标文件”确认每个物种及目标文件。")
                 return
             try:
+                from ssu18s_policy import length_limits
+                minimum_bp,maximum_bp=length_limits(int(min_bp.get()),int(max_bp.get()))
                 mismatch_limit=int(mismatches.get())
                 coverage_lower=int(coverage_min.get()) if coverage_min.get().strip() else None
                 coverage_upper=int(coverage_max.get()) if coverage_max.get().strip() else None
@@ -91,10 +96,14 @@ def main():
                 if not 1<=background_distance<=20:raise ValueError()
                 if exception_limit<0:raise ValueError()
             except ValueError:
-                messagebox.showerror('请检查筛选参数','目标错配0–4；覆盖物种下限≥1且不大于上限；背景最少错配1–20。')
+                messagebox.showerror('请检查筛选参数','20 ≤ 最短bp ≤ 最长bp；目标错配0–4；覆盖下限≥1且不大于上限；背景最少错配1–20；例外种数≥0。')
                 return
             command.extend([str(ROOT/'ssu18s_run.py'),'--threads',str(t),'--mismatches',str(mismatch_limit),
-                            '--background-min-mismatches',str(background_distance),'--max-exception-species',str(exception_limit)])
+                            '--background-min-mismatches',str(background_distance),'--max-exception-species',str(exception_limit),
+                            '--min-bp',str(minimum_bp),'--max-bp',str(maximum_bp)])
+            if mode.get()=="18S在线搜索":
+                command.extend(['--target',name.get().strip(),'--database',db])
+                for genus in supplied:command.extend(['--background-genus',genus])
             if coverage_lower is not None:command.extend(['--coverage-min',str(coverage_lower)])
             if coverage_upper is not None:command.extend(['--coverage-max',str(coverage_upper)])
             if mode.get()=="18S本地FASTA":

@@ -34,7 +34,7 @@ def run(root,mismatches=2,coverage_min=None,coverage_max=None,background_min_mis
     candidate=analyze(root,mismatches,mismatches,background_min_mismatches-1,window_length=21,write_outputs=False,
                       coverage_min=coverage_min,coverage_max=coverage_max,excluded_species=excluded_species,max_exception_species=max_exception_species)
     app.write_json(work/'candidate_regions_21nt.json',candidate)
-    records=filter_records(json.loads((root/'curated_records.json').read_text()))
+    records=filter_records(json.loads((root/'curated_records.json').read_text()),root)
     records=[r for r in records if r['organism'] not in candidate['excluded_species']]
     reference=next(r for r in records if r['accession']==candidate['reference'])
     rows=[];skipped=0
@@ -85,7 +85,7 @@ def run(root,mismatches=2,coverage_min=None,coverage_max=None,background_min_mis
             raise RuntimeError('Official CLI and Predictor activity scores disagree')
     result['rows'].sort(key=lambda r:(-r['activity'],r['start'],r['strand']))
     for i,row in enumerate(result['rows'],1):row['design_id']=f'EasyDesign_Cas12a_{i:03d}'
-    result.update(min_input_bp=800,max_input_bp=4000,spacer_length=21,not_scored_20nt=True,
+    result.update(min_input_bp=candidate['min_input_bp'],max_input_bp=candidate['max_input_bp'],spacer_length=21,not_scored_20nt=True,
                   max_exception_species=max_exception_species,
                   excluded_species=candidate['excluded_species'],
                   coverage_min=candidate['coverage_min'],coverage_max=candidate['coverage_max'],background_min_mismatches=background_min_mismatches,
@@ -94,7 +94,7 @@ def run(root,mismatches=2,coverage_min=None,coverage_max=None,background_min_mis
                   context_insufficient=skipped,input_records=len(records),source_url='https://github.com/scRNA-Compt/EasyDesign',
                   model_hashes={str(p.relative_to(SOURCE)):app.checksum(p) for p in (SOURCE/'easyDesign/models').rglob('*') if p.is_file()},
                   source_archive_sha256=app.checksum(SOURCE.parent/'EasyDesign-main.zip') if (SOURCE.parent/'EasyDesign-main.zip').exists() else None,
-                  scope='Reference-target activity prediction; conserved genus candidates are not N. gruberi species-specific. No claim of experimentally measured activity or uniform activity across species. DR comes from CaSilico default, not a CaSilico validation of 21nt spacers.')
+                  scope='Reference-target activity prediction; conserved genus candidates are not necessarily target-species-specific. No claim of experimentally measured activity or uniform activity across species. DR comes from CaSilico default, not a CaSilico validation of 21nt spacers.')
     app.write_json(out/'easydesign_results.json',result)
     fields=['design_id','group','reference','start','end','strand','pam','sequence','spacer_rna','full_crrna_rna',
             'gc_percent','activity','classification_score','regression_raw','highly_active','compared_species','total_species','max_mismatches','official_cli_activity']

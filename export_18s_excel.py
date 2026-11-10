@@ -44,7 +44,8 @@ def export(source, destination):
                 sheet.write_row(0, 0, tab['headers'], header)
         conditions = [
             ['目标种', result['target'], '参考 ' + result['reference']],
-            ['输入长度', '800–4000 bp', '包含边界，范围外不参与分析'],
+            ['输入长度', f"{result.get('min_input_bp',800)}–{result.get('max_input_bp',4000)} bp", '按提取的18S长度，包含边界，范围外不参与分析'],
+            ['背景范围', ', '.join(result.get('background_genera', [])), result.get('database', '本地或历史输入')],
             ['保守覆盖物种区间', f"{result['coverage_min']}–{result['coverage_max']}", f"目标/保守窗口允许最多{result['conserved_mismatches']}个替换"],
             ['背景最少错配', result['background_mismatches'] + 1, '双链全部窗口筛查，任一记录近似命中使该物种成为例外'],
             ['每段例外物种上限', result['max_exception_species'], '各段分别统计，全部背景保留，同种多记录计一次'],
