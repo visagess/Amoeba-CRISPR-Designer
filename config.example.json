@@ -1,0 +1,15 @@
+{
+  "storage": "F:/AmoebaCrisp",
+  "rscript": "F:/CaSilico/R/bin/Rscript.exe",
+  "r_library": "F:/CaSilico/library",
+  "wsl_distribution": "Ubuntu",
+  "linux_env_bin": "/opt/amoebacrisp/bin",
+  "orthofinder": "/opt/amoebacrisp/bin/orthofinder",
+  "snakemake": "/opt/amoebacrisp/bin/snakemake",
+  "braker4": "/mnt/f/AmoebaCrisp/software/BRAKER4",
+  "easydesign_source": "F:/AmoebaCrisp/software/EasyDesign",
+  "easydesign_python": "F:/AmoebaCrisp/software/easydesign-env/python.exe",
+  "direct_repeat_rna": "UAAUUUCUACUAAGUGUAGAU",
+  "gc_min": 40,
+  "gc_max": 65
+}

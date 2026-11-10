@@ -1,0 +1,9 @@
+name: amoeba-crispr-tools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - numpy
+  - mafft=7.526
+  - blast=2.16
