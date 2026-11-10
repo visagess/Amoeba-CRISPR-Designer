@@ -30,9 +30,9 @@ class SSUTests(unittest.TestCase):
         self.assertEqual(dna,'TTTTAAAA')
         self.assertEqual((start,end,wraps),(13,4,True))
     def test_unknown_species_not_automatically_a_negative(self):
-        self.assertEqual(s.classify('Naegleria sp. PL0398'),'unresolved_Naegleria')
-        self.assertEqual(s.classify('Naegleria cf. gruberi'),'unresolved_Naegleria')
-        self.assertEqual(s.classify('Naegleria spitzbergeniensis'),'background_Naegleria_named')
+        self.assertEqual(s.classify('Naegleria sp. PL0398'),'unresolved_genus')
+        self.assertEqual(s.classify('Naegleria cf. gruberi'),'unresolved_genus')
+        self.assertEqual(s.classify('Naegleria spitzbergeniensis'),'background_genus')
     def test_conserved_dna_regions_cannot_bridge_an_insertion(self):
         reference='A'*25+'C'*25
         cohort=[{'id':'a','sequence':reference},{'id':'b','sequence':'A'*25+'GGGG'+'C'*25}]

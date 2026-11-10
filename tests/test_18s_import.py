@@ -29,7 +29,7 @@ class ImportTests(unittest.TestCase):
             imp.import_inputs(manifest,out)
             rows=json.loads((out/'curated_records.json').read_text())
             self.assertEqual(len(rows),2)
-            self.assertEqual([r['role'] for r in rows],['target_N_gruberi','background_Naegleria_named'])
+            self.assertEqual([r['role'] for r in rows],['target','background_genus'])
             self.assertEqual(len(json.loads((out/'local_import.json').read_text())['excluded_by_length']),2)
             self.assertTrue(all(Path(r['source_file']).exists() for r in rows))
             self.assertEqual(len(list((out/'imported_files').glob('*'))),2)
