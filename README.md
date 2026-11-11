@@ -147,4 +147,4 @@ Sequence-screening conclusions apply to the selected inputs and mismatch rules. 
 
 ## Acknowledgements
 
-The workflow requirements were inspired by [CrispHunter](https://github.com/2021JohnSheng/CrispHunter). This repository contains an independent implementation for the amoeba use case. Third-party software remains under its upstream licenses. See [DEPENDENCIES.md](DEPENDENCIES.md).
+Third-party software remains under its upstream licenses. See [DEPENDENCIES.md](DEPENDENCIES.md).
