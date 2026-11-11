@@ -1,6 +1,6 @@
 # Amoeba CRISPR Designer
 
-阿米巴 CRISPR 设计。A local workflow for comparing amoeba sequences and designing candidate CRISPR-Cas12a crRNAs using CaSilico and EasyDesign.
+Amoeba CRISPR Designer.A local workflow for comparing amoeba sequences and designing candidate CRISPR-Cas12a crRNAs using CaSilico and EasyDesign.
 
 The current primary workflow compares nuclear 18S rDNA. It finds conserved and conditionally species-specific windows, separates windows with and without a canonical TTTV PAM, and exports Excel results with GC content, species coverage, exception species and matching evidence.
 
