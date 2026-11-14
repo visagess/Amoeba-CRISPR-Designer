@@ -6,9 +6,11 @@ import hashlib
 from pathlib import Path
 parser=argparse.ArgumentParser()
 parser.add_argument('--data',default=str(storage_path('18S_analysis')))
+parser.add_argument('--nopam-json')
+parser.add_argument('--output-dir')
 args=parser.parse_args()
 out=Path(args.data)/'comparison'
-dest=out/'excel_export';dest.mkdir(exist_ok=True)
+dest=Path(args.output_dir) if args.output_dir else out/'excel_export';dest.mkdir(parents=True,exist_ok=True)
 result=json.loads((out/'four_groups.json').read_text(encoding='utf-8'))
 headers=['序列ID','参考Accession','起点（bp）','终点（bp）','链','DNA（5′→3′，20nt）','PAM','GC含量','目标优先序列支持数','保守覆盖物种数或背景已评估数','有效物种标签总数','覆盖物种内最大错配数','本窗口未评估物种','来源','保守覆盖物种名单','位点已评估物种数','非例外背景错配下界']
 def exception_text(row):
@@ -42,5 +44,13 @@ tabs.append({'name':'EasyDesign_21nt设计',
              r['compared_species'],r['total_species'],r['max_mismatches'],r['model_sequence'],r['official_cli_activity'],r.get('distinguishable_species_count'),r.get('exception_species_count'),r.get('exception_species',''),exception_text(r),r.get('unresolved_matching_labels',''),r.get('unresolved_matching_records'),r.get('specificity_status','')] for r in activity['rows']],
     'widths':[32,26,22,14,14,8,12,34,34,60,14,24,23,23,26,22,24,28,42,26,32,22,78,110,100,28,48],
     'formats':{'K':'0.0%','L':'0.0000','M':'0.0000','N':'0.0000','T':'0.0000'},'wrap_columns':['W','X','Y','AA']})
-(dest/'inputs.json').write_text(json.dumps({'four_groups':result,'activity':activity,'tabs':tabs},ensure_ascii=False),encoding='utf-8')
+payload={'four_groups':result,'activity':activity,'tabs':tabs}
+if args.nopam_json:
+    from nopam_design import result_tabs
+    nopam=json.loads(Path(args.nopam_json).read_text(encoding='utf-8'))
+    if nopam['source_sha256']!=hashlib.sha256((out/'four_groups.json').read_bytes()).hexdigest():
+        raise ValueError('无PAM二次设计与原比较结果不一致，请重新运行')
+    tabs.extend(result_tabs(nopam))
+    payload['nopam_design']={key:value for key,value in nopam.items() if key!='rows'}
+(dest/'inputs.json').write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
 print(json.dumps(result['counts'],ensure_ascii=False))

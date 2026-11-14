@@ -10,6 +10,7 @@
 | [BRAKER4](https://github.com/Gaius-Augustus/BRAKER4) | Optional genome annotation | Official Snakemake workflow, Apptainer and required evidence/databases |
 | [OrthoFinder](https://github.com/davidemms/OrthoFinder) | Optional protein orthogroup identification | Shared-gene mode with multiple assemblies |
 | [XlsxWriter](https://xlsxwriter.readthedocs.io/) | Portable Excel export | Main Python requirements |
+| [ViennaRNA/RNAfold](https://www.tbi.univie.ac.at/RNA/) | No-PAM spacer RNA self-folding | Separate structure environment, tested 2.8.0 |
 | NumPy | Packed short-guide background screening | Windows and WSL Python environments |
 
 Install dependencies from their upstream distributions and observe their licenses and citation guidance. Model weights, third-party source trees, binaries, R libraries, containers, environments, downloaded biological datasets and local analysis results are external to this repository.

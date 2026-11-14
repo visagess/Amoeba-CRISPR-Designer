@@ -9,6 +9,7 @@
   "braker4": "/mnt/f/AmoebaCrisp/software/BRAKER4",
   "easydesign_source": "F:/AmoebaCrisp/software/EasyDesign",
   "easydesign_python": "F:/AmoebaCrisp/software/easydesign-env/python.exe",
+  "structure_python": "F:/AmoebaCrisp/software/structure-env/Scripts/python.exe",
   "direct_repeat_rna": "UAAUUUCUACUAAGUGUAGAU",
   "gc_min": 40,
   "gc_max": 65

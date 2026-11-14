@@ -127,7 +127,15 @@ def main():
             command.extend([str(ROOT/'amoebacrisp.py'),'--name',name.get().strip(),'--database',db,
                             '--max-groups',str(n),'--threads',str(t)])
             if background.get():command.extend(['--background',background.get()])
+        run_command(command)
+
+    def run_command(command):
+        if state['process'] is not None:
+            messagebox.showinfo('任务运行中','请等待当前任务结束。')
+            return
+        state['process']='starting'
         launch.configure(state="disabled")
+        nopam_button.configure(state='disabled')
         append("\n开始分析……\n")
 
         def work():
@@ -155,6 +163,7 @@ def main():
                         state["output"] = value.split("：", 1)[1].strip()
                 else:
                     launch.configure(state="normal")
+                    nopam_button.configure(state='normal')
                     state["process"] = None
                     append("\n分析完成，请打开结果文件夹。\n" if value == 0 else "\n分析未完成，请查看上方错误及输出文件夹中的日志。\n")
         except queue.Empty:
@@ -176,6 +185,39 @@ def main():
     launch = ttk.Button(buttons, text="开始设计", command=start)
     launch.pack(side="left")
     ttk.Button(buttons, text="打开结果文件夹", command=open_output).pack(side="left", padx=12)
+    def design_nopam():
+        folder=filedialog.askdirectory(title='选择含comparison/four_groups.json的分析任务目录',initialdir=str(storage_path('18S_analysis')))
+        if not folder:return
+        if not (Path(folder)/'comparison/four_groups.json').exists():
+            messagebox.showerror('缺少比较结果','所选目录需要包含comparison/four_groups.json。')
+            return
+        dialog=tk.Toplevel(window)
+        dialog.title('无PAM spacer RNA二次设计')
+        content=ttk.Frame(dialog,padding=20)
+        content.pack(fill='both',expand=True)
+        values=[tk.StringVar(value=value) for value in ('5','-2','37')]
+        for row,(label,value) in enumerate(zip(('spacer 5′端窗口长度（nt）','最低允许MFE（kcal/mol）','RNAfold温度（°C）'),values)):
+            ttk.Label(content,text=label).grid(row=row,column=0,sticky='w',padx=8,pady=6)
+            ttk.Entry(content,textvariable=value).grid(row=row,column=1,padx=8,pady=6)
+        ttk.Label(content,text='总体GC严格小于60%，优先选择5′端GC低、配对碱基少的spacer。\n−2 kcal/mol是可调的初筛值，使用ViennaRNA计算单独spacer的结构。').grid(row=3,column=0,columnspan=2,pady=10)
+        def submit():
+            try:
+                import math
+                prefix=int(values[0].get());energy=float(values[1].get());temperature=float(values[2].get())
+                if prefix<1 or not math.isfinite(energy) or not math.isfinite(temperature) or not 0<=temperature<=100:
+                    raise ValueError()
+            except ValueError:
+                messagebox.showerror('请检查参数','窗口需为正整数，MFE需为有限数值，温度需为0–100°C。',parent=dialog)
+                return
+            command=[sys.executable.replace('pythonw.exe','python.exe'),'-u',str(ROOT/'nopam_design.py'),
+                     '--data',folder,'--five-prime-window',str(prefix),'--min-mfe',str(energy),'--temperature',str(temperature)]
+            dialog.destroy()
+            run_command(command)
+        ttk.Button(content,text='开始设计并导出Excel',command=submit).grid(row=4,column=0,columnspan=2,pady=8)
+
+    nopam_button=ttk.Button(buttons,text='无PAM二次设计',command=design_nopam)
+    nopam_button.pack(side='left',padx=8)
+
     def select_local():
         from ssu18s_import import infer_species,read_records
         files=filedialog.askopenfilenames(title='选择目标及背景18S FASTA（每个文件一个物种）',filetypes=[('FASTA','*.fa *.fasta *.fna *.fas *.fsa *.gz'),('全部','*')])

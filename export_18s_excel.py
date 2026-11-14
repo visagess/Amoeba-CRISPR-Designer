@@ -59,6 +59,16 @@ def export(source, destination):
             ['CaSilico', '独立20nt设计', '完整21nt RNA为默认DR＋spacer组装，非CaSilico对21nt的验证'],
             ['数据边界', result['input_records'], '仅针对本轮输入记录，缺失数据不能作为特异证据'],
         ]
+        if data.get('nopam_design'):
+            nopam = data['nopam_design']
+            conditions.extend([
+                ['无PAM spacer总体GC', '<60%', '严格小于60%，按spacer RNA计数'],
+                ['5′端排序窗口', nopam['five_prime_window'], '按spacer RNA 5′端GC升序，随后优先配对碱基少、MFE较高的候选'],
+                ['spacer结构引擎', nopam['engine'] + ' ' + nopam['engine_version'], nopam['parameters']],
+                ['结构计算温度（°C）', nopam['temperature_celsius'], '单独spacer RNA的分子内折叠'],
+                ['最低允许MFE（kcal/mol）', nopam['minimum_mfe_kcal_mol'], '可调的初始工程筛选阈值，尚需针对实验体系验证'],
+                ['新设计的链方向', '与靶DNA反向互补', '靶DNA和spacer RNA均以5′→3′显示，来源位点及特异性证据可追溯'],
+            ])
         start = len(data['tabs']) + 3
         overview.write_row(start, 0, ['分析条件', '设置', '说明'], header)
         for row, values in enumerate(conditions, start + 1):

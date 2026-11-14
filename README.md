@@ -1,6 +1,6 @@
 # Amoeba CRISPR Designer
 
-Amoeba CRISPR Designer.A local workflow for comparing amoeba sequences and designing candidate CRISPR-Cas12a crRNAs using CaSilico and EasyDesign.
+阿米巴 CRISPR 设计。A local workflow for comparing amoeba sequences and designing candidate CRISPR-Cas12a crRNAs using CaSilico and EasyDesign.
 
 The current primary workflow compares nuclear 18S rDNA. It finds conserved and conditionally species-specific windows, separates windows with and without a canonical TTTV PAM, and exports Excel results with GC content, species coverage, exception species and matching evidence.
 
@@ -129,6 +129,29 @@ Different within-species sequences remain in comparison. Identical sequences wit
 
 ## Outputs
 
+### No-PAM spacer RNA refinement
+
+Click **无PAM二次设计** and select an existing analysis task directory containing `comparison/four_groups.json`. The dialog exposes the spacer 5′ window length, minimum permitted MFE and folding temperature. Defaults are **5 nt**, **−2 kcal/mol** and **37°C**. Total spacer GC must be strictly below **60%**. These settings also work through the command line.
+
+```powershell
+python nopam_design.py --data F:/AmoebaCrisp/18S_analysis --five-prime-window 5 --min-mfe -2 --temperature 37
+```
+
+The program constructs both complementary targeting orientations from each no-PAM window. Target DNA and spacer RNA are displayed 5′→3′ and are reverse complements. Ranking prioritizes lower GC in the first 5 nt of the **spacer RNA**, fewer paired nucleotides in its MFE structure, higher MFE, and higher mean unpaired probability in the 5′ window. The original species coverage, exception species and unresolved matches are retained.
+
+Structures are calculated for the isolated spacer using **ViennaRNA/RNAfold 2.8.0**, Turner2004 RNA parameters. Output includes MFE, ensemble free energy, dot-bracket structure, paired nucleotide count and the mean ensemble unpaired probability of the 5′ window. MFE ≥ −2 kcal/mol is an adjustable initial engineering screen. A system-specific activity threshold still needs experimental validation. The folding model addresses the isolated spacer. Protocol compatibility for a no-PAM Cas12a assay must be established separately.
+
+Install the free structure engine into a separate environment on F\ drive and set `structure_python` in `config.json` if using a different path.
+
+```powershell
+python -m venv F:\AmoebaCrisp\software\structure-env
+F:\AmoebaCrisp\software\structure-env\Scripts\python.exe -m pip install --cache-dir F:\AmoebaCrisp\software\pip-cache ViennaRNA==2.8.0
+```
+
+NUPACK's current download site requires an active paid subscription and describes separate licensing for GUI integrations. The implemented free calculation engine is ViennaRNA. Thermodynamic folding and lower structural stability guide candidate screening, while measured activity remains assay-dependent. [NUPACK licensing](https://www.nupack.org/download/license), [ViennaRNA](https://www.tbi.univie.ac.at/RNA/), [SCas12aV2 protocol](https://doi.org/10.21769/bioprotoc.5462).
+
+The refined Excel workbook retains the six original sheets and adds `RNAfold_无PAM保守` and `RNAfold_无PAM特异` with passed designs only. Each refinement run writes a separate output directory with source checksums, raw folding calculations, filtering settings and a spacer FASTA file.
+
 Excel workbooks are written under `F:/AmoebaCrisp/outputs/<run-name>` by default. Filenames include the target species and bp range. The six sheets are overview, conserved with PAM, conserved without PAM, specific with PAM, specific without PAM, and EasyDesign 21 nt designs. Empty groups have headers only.
 
 Rows include coordinates, strand, GC content, coverage, exception species and matching evidence where applicable. Underlying JSON, TSV, FASTA, alignments, CaSilico results, official EasyDesign design output and model/input checksums remain under the run's `comparison` directory.
@@ -147,4 +170,4 @@ Sequence-screening conclusions apply to the selected inputs and mismatch rules. 
 
 ## Acknowledgements
 
-Third-party software remains under its upstream licenses. See [DEPENDENCIES.md](DEPENDENCIES.md).
+The workflow requirements were inspired by [CrispHunter](https://github.com/2021JohnSheng/CrispHunter). This repository contains an independent implementation for the amoeba use case. Third-party software remains under its upstream licenses. See [DEPENDENCIES.md](DEPENDENCIES.md).
